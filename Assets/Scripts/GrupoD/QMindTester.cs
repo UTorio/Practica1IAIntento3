@@ -2,7 +2,7 @@ using NavigationDJIA.World;
 using QMind;
 using QMind.Interfaces;
 
-namespace GrupoA
+namespace GrupoD
 {
     public class QMindTester : IQMind
     {
@@ -31,7 +31,7 @@ namespace GrupoA
 
         private string BuildStateKey(CellInfo agent, CellInfo other, WorldInfo _worldInfo)
         {
-            var state = new QState(agent, other);
+            var state = new QState(agent, other, _worldInfo);
             return state.ToKey();
         }
 
