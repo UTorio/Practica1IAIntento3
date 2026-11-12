@@ -114,5 +114,14 @@ namespace GrupoD
         {
             _storage.Save();
         }
+
+        private void LogStats(string where)
+        {
+            double sum = 0;
+            foreach (var kv in _storage.Data)
+                foreach (float v in kv.Value) sum += v;
+            UnityEngine.Debug.Log($"[QTable {where}] estados: {_storage.Data.Count} | suma Q: {sum:F2}");
+        }
+
     }
 }

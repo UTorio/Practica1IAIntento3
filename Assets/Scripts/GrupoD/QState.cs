@@ -1,5 +1,5 @@
 using NavigationDJIA.World;
-
+using System;
 /// <summary>
 /// TODO(alumno):
 /// Define el "estado" que usará la Tabla Q para identificar cada situación del agente.
@@ -27,143 +27,99 @@ namespace GrupoD
 {
     public sealed class QState
     {
-    private static readonly int[] DX4 = { 0, 0, 1, -1 };   // Up, Down, Right, Left
-        private static readonly int[] DY4 = { 1, -1, 0, 0 };
- 
-        // Menos casillas "ganadas" al perseguidor que esto = callejón
-        private const int TrappedThreshold = 6;
- 
-        // Caché por mundo: consultar world[x, y] es caro, así que se hace una vez por mapa
-        private static WorldInfo _cachedWorld;
-        private static bool[,] _walkable;
-        private static int[,] _distChaser;
-        private static int[,] _distTmp;
+        private const int MaxDepth = 12;   // hasta dónde mira el BFS
+
+        // buffers reutilizables (evitan generar basura en cada paso)
+        private static int[] _distA, _distO, _first, _queue;
+        private static readonly int[] _safe = new int[4];
         private static int _w, _h;
-        private static int[] _queueBuf;   // cola del BFS (cada casilla se guarda como x * alto + y)
- 
-        public int DistBucket { get; }
-        public int[] DirCat { get; }
- 
+
+        // direcciones: 0=Up (y+1), 1=Down (y-1), 2=Left (x-1), 3=Right (x+1)
+        private static readonly int[] StepX = { 0, 0, -1, 1 };
+        private static readonly int[] StepY = { 1, -1, 0, 0 };
+
+        private readonly int _sx, _sy;   // lado del jugador: -1, 0 o 1 en cada eje
+        private readonly bool _terminal;
+        private readonly int[] _level = new int[4];   // 0=muro, 1=trampa, 2=poco, 3=medio, 4=mucho
+        private readonly int _dangerBucket;           // 0=pegado al jugador ... 3=lejos
+
         public QState(CellInfo agent, CellInfo other, WorldInfo world)
         {
-            EnsureGrid(world);
-            DirCat = new int[4];
- 
-            // Estado terminal (capturado): no hace falta calcular nada
-            if (agent.x == other.x && agent.y == other.y)
+            if (agent.Equals(other)) { _terminal = true; return; }
+
+            EnsureBuffers(world.WorldSize.x, world.WorldSize.y);
+
+            Bfs(world, agent.x, agent.y, _distA, _first, MaxDepth);
+            Bfs(world, other.x, other.y, _distO, null, MaxDepth + 1);
+
+            Array.Clear(_safe, 0, 4);
+            for (int idx = 0; idx < _w * _h; idx++)
             {
-                DistBucket = 0;
-                return;
+                int da = _distA[idx];
+                if (da <= 0) continue;                        // inalcanzable o la propia celda
+                int dO = _distO[idx];
+                if (dO == -1 || da < dO) _safe[_first[idx]]++; // el zombi llega antes que el jugador
             }
- 
-            // Distancias por camino desde el perseguidor a todas las casillas
-            Bfs(other.x, other.y, _distChaser);
-            int d0 = _distChaser[agent.x, agent.y];
-            if (d0 < 0) d0 = _w * _h;
-            DistBucket = Bucket(d0);
- 
-            for (int d = 0; d < 4; d++)
+
+            for (int i = 0; i < 4; i++)
             {
-                int nx = agent.x + DX4[d];
-                int ny = agent.y + DY4[d];
- 
-                if (nx < 0 || ny < 0 || nx >= _w || ny >= _h || !_walkable[nx, ny])
-                {
-                    DirCat[d] = 0;   // bloqueada
-                    continue;
-                }
- 
-                int dn = _distChaser[nx, ny];
-                if (dn >= 0 && dn < d0)
-                {
-                    DirCat[d] = 1;   // me acerco
-                    continue;
-                }
- 
-                // Me alejo: ¿cuánto espacio tengo allí? Cuento las casillas que alcanzo
-                // antes que el perseguidor si salgo en esa dirección.
-                Bfs(nx, ny, _distTmp);
-                int territory = 0;
-                for (int x = 0; x < _w; x++)
-                {
-                    for (int y = 0; y < _h; y++)
-                    {
-                        int mine = _distTmp[x, y];
-                        if (mine < 0) continue;
-                        int his = _distChaser[x, y];
-                        if (his < 0 || mine + 1 < his) territory++;
-                    }
-                }
- 
-                DirCat[d] = territory < TrappedThreshold ? 2 : 3;
+                CellInfo n = world[agent.x + StepX[i], agent.y + StepY[i]];
+                if (n == null || !n.Walkable) _level[i] = 0;
+                else if (_safe[i] == 0) _level[i] = 1;
+                else if (_safe[i] <= 3) _level[i] = 2;
+                else if (_safe[i] <= 10) _level[i] = 3;
+                else if (_safe[i] <= 30) _level[i] = 4;
+                else _level[i] = 5;
+
             }
+
+            int dd = _distO[agent.x * _h + agent.y];   // pasos del jugador hasta el zombi
+            _dangerBucket = dd == -1 ? 3 : dd <= 1 ? 0 : dd == 2 ? 1 : dd <= 4 ? 2 : 3;
         }
- 
-        public string ToKey()
+
+        private static void EnsureBuffers(int w, int h)
         {
-            return $"{DistBucket}|{DirCat[0]}{DirCat[1]}{DirCat[2]}{DirCat[3]}";
+            if (_distA != null && w == _w && h == _h) return;
+            _w = w; _h = h;
+            _distA = new int[w * h]; _distO = new int[w * h];
+            _first = new int[w * h]; _queue = new int[w * h];
         }
- 
-        private static int Bucket(int d)
+
+        private static void Bfs(WorldInfo world, int sx, int sy, int[] dist, int[] first, int maxDepth)
         {
-            if (d <= 4) return d;    // 1..4
-            if (d <= 6) return 5;
-            if (d <= 9) return 6;
-            return 7;
-        }
- 
-        private static void EnsureGrid(WorldInfo world)
-        {
-            if (ReferenceEquals(world, _cachedWorld) && _walkable != null)
-                return;
- 
-            _cachedWorld = world;
-            _w = world.WorldSize.x;
-            _h = world.WorldSize.y;
-            _walkable = new bool[_w, _h];
-            _distChaser = new int[_w, _h];
-            _distTmp = new int[_w, _h];
-            _queueBuf = new int[_w * _h];
- 
-            for (int x = 0; x < _w; x++)
-            {
-                for (int y = 0; y < _h; y++)
-                {
-                    CellInfo cell = world[x, y];
-                    _walkable[x, y] = cell != null && cell.Walkable;
-                }
-            }
-        }
- 
-        // BFS: pasos mínimos desde (sx, sy) a cada casilla esquivando muros (-1 = inalcanzable)
-        private static void Bfs(int sx, int sy, int[,] dist)
-        {
-            for (int x = 0; x < _w; x++)
-                for (int y = 0; y < _h; y++)
-                    dist[x, y] = -1;
- 
-            int head = 0;
-            int tail = 0;
-            dist[sx, sy] = 0;
-            _queueBuf[tail++] = sx * _h + sy;
- 
+            Array.Fill(dist, -1);
+            int head = 0, tail = 0;
+            int start = sx * _h + sy;
+            dist[start] = 0;
+            _queue[tail++] = start;
+
             while (head < tail)
             {
-                int cell = _queueBuf[head++];
-                int cx = cell / _h;
-                int cy = cell % _h;
-                for (int d = 0; d < 4; d++)
+                int cur = _queue[head++];
+                int d = dist[cur];
+                if (d >= maxDepth) continue;
+                int cx = cur / _h, cy = cur % _h;
+
+                for (int i = 0; i < 4; i++)
                 {
-                    int nx = cx + DX4[d];
-                    int ny = cy + DY4[d];
+                    int nx = cx + StepX[i], ny = cy + StepY[i];
                     if (nx < 0 || ny < 0 || nx >= _w || ny >= _h) continue;
-                    if (!_walkable[nx, ny] || dist[nx, ny] != -1) continue;
- 
-                    dist[nx, ny] = dist[cx, cy] + 1;
-                    _queueBuf[tail++] = nx * _h + ny;
+                    int ni = nx * _h + ny;
+                    if (dist[ni] != -1) continue;
+                    CellInfo c = world[nx, ny];
+                    if (c == null || !c.Walkable) continue;
+
+                    dist[ni] = d + 1;
+                    if (first != null) first[ni] = (d == 0) ? i : first[cur];
+                    _queue[tail++] = ni;
                 }
             }
         }
-    
+
+        public string ToKey()
+        {
+            if (_terminal) return "T";   // estado terminal propio, nunca se confunde con uno real
+            return $"{_level[0]}{_level[1]}{_level[2]}{_level[3]}|{_dangerBucket}|{_sx}{_sy}";
+        }
     }
 }

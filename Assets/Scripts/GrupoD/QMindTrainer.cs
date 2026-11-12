@@ -23,12 +23,12 @@ namespace GrupoD
         private float _returnAveraged;
         private System.Random _random = new System.Random();
 
-        // --- Ajustes de entrenamiento (tócalos aquí si quieres) ---
+        // --- Ajustes de entrenamiento ---
         private const int MaxStepsPerEpisode = 300;   // tope de pasos por episodio
-        private const float EpsilonMin = 0.05f;       // epsilon nunca baja de esto
+        private const float EpsilonMin = 0.002f;       // epsilon nunca baja de esto
         private const float EpsilonDecay = 0.998f;    // epsilon = params.epsilon * decay^episodio
         private const int SaveEvery = 50;             // guarda la tabla cada N episodios
-        private const int LogEvery = 100;             // log de pasos medios cada N episodios
+        private const int LogEvery = 50;             // log de pasos medios cada N episodios
 
         private float _epsilon;
         private bool[,] _walkable;     // casillas transitables del mapa actual (caché)
@@ -39,7 +39,7 @@ namespace GrupoD
         private int _episodesWindow;
 
         #region IQMindTrainer implementation
-        public int CambioMapa = 100;
+        public int CambioMapa = 500;
         public CellInfo AgentPosition => _agentPosition;
         public CellInfo OtherPosition => _otherPosition;
 
@@ -148,7 +148,7 @@ namespace GrupoD
             bool terminal = IsTerminalState(newAgentPos, newOtherPos);
 
             // Calcula la recompensa
-            float reward = ComputeReward(oldAgent, oldOther, newAgentPos, newOtherPos, action);
+            float reward = ComputeReward(newAgentPos, newOtherPos);
 
             if (train)
             {
@@ -186,8 +186,15 @@ namespace GrupoD
                 return _qTable.GetBestAction(stateKey);
             }
 
+            float eps = _params.epsilon;
+            if (_params.episodes > 0)
+            {
+                float progress = CurrentEpisode / (float)_params.episodes;
+                eps = Math.Max(0.02f, _params.epsilon * (1f - progress));
+            }
+
             double r = _random.NextDouble();
-            if (r < _epsilon)
+            if (r < eps)
             {
                 // Acción aleatoria
                 Array actions = Enum.GetValues(typeof(QAction));
@@ -218,47 +225,14 @@ namespace GrupoD
         /// Recompensa para un zombi que huye. Escala moderada:
         /// morir = -100; el resto de pasos oscilan aproximadamente entre -1 y +0.8.
         /// </summary>
-        private float ComputeReward(CellInfo oldAgent, CellInfo oldOther, CellInfo agent, CellInfo other, QAction action)
+        private float ComputeReward(CellInfo agent, CellInfo other)
         {
-            // 1) Castigo terminal
-            if (IsTerminalState(agent, other))
-                return -100f;
-
-            // Distancias REALES por camino (esquivando muros), no Manhattan.
-            // Un BFS desde el perseguidor antes de moverse nos da la distancia del agente
-            // antes y después de SU movimiento; otro BFS desde su nueva posición da la distancia final.
-            int[,] fromOldOther = DistancesFrom(oldOther);
-            int distBefore = PathDist(fromOldOther, oldAgent);
-            int distAfterOwnMove = PathDist(fromOldOther, agent);
-            int[,] fromNewOther = DistancesFrom(other);   // reutiliza el buffer: leer lo anterior antes
-            int dist = PathDist(fromNewOther, agent);
-
-            float maxDist = BoardWidth() + BoardHeight();   // normaliza: el tablero es variable
-
-            // 2) Bonus por sobrevivir
-            float reward = 0.35f;
-
-            // 3) Bonus por estar lejos
-            reward += 0.05f * Math.Min(1f, dist / maxDist);
-
-            // 4) Lo que ha hecho el agente con SU movimiento:
-            //    + si se aleja del perseguidor, - si se acerca, 0 si se queda.
-            int delta = distAfterOwnMove - distBefore;
-            if (delta > 0)
-                reward += 0.75f * delta;
-            else if (delta < 0)
-                reward += 0.1f * delta;
-
-            // 5) Penalización por rincones y callejones
-            int walls = CountAdjacentWalls(agent);
-            if (walls >= 2)
-                reward -= 0.1f * (walls - 1);
-
-            // 6) Penalización por chocar contra un muro (intentó moverse y no pudo)
-            if (action != QAction.Stay && agent.x == oldAgent.x && agent.y == oldAgent.y)
-                reward -= 1.1f;
-
-            return reward;
+            if (IsTerminalState(agent, other)) return -100f;
+            float d = agent.Distance(other, CellInfo.DistanceType.Manhattan);
+            float tier = d >= 8 ? 1f      // far
+                       : d >= 4 ? 0.5f    // medium
+                       : 0f;              // close
+            return 1f + tier;
         }
 
         private int ManhattanDistance(CellInfo a, CellInfo b)
@@ -289,22 +263,20 @@ namespace GrupoD
                     _walkable[x, y] = _worldInfo[x, y].Walkable;
         }
 
-        // Muros adyacentes (los límites del tablero también cuentan como muro)
-        private int CountAdjacentWalls(CellInfo c)
+        private int CountFreeNeighbours(CellInfo c)
         {
-            EnsureGrid();
-            int w = _walkable.GetLength(0);
-            int h = _walkable.GetLength(1);
+            int n = 0;
+            if (IsFree(c.x + 1, c.y)) n++;
+            if (IsFree(c.x - 1, c.y)) n++;
+            if (IsFree(c.x, c.y + 1)) n++;
+            if (IsFree(c.x, c.y - 1)) n++;
+            return n;
+        }
 
-            int count = 0;
-            for (int d = 0; d < 4; d++)
-            {
-                int nx = c.x + DX[d];
-                int ny = c.y + DY[d];
-                if (nx < 0 || ny < 0 || nx >= w || ny >= h || !_walkable[nx, ny])
-                    count++;
-            }
-            return count;
+        private bool IsFree(int x, int y)
+        {
+            CellInfo cell = _worldInfo[x, y];
+            return cell != null && cell.Walkable;
         }
 
         // BFS: pasos mínimos desde 'origin' hasta cada casilla esquivando muros (-1 = inalcanzable).
