@@ -39,7 +39,7 @@ namespace GrupoD
         private int _episodesWindow;
 
         #region IQMindTrainer implementation
-        public int CambioMapa = 500;
+        public int CambioMapa = 50000;
         public CellInfo AgentPosition => _agentPosition;
         public CellInfo OtherPosition => _otherPosition;
 
