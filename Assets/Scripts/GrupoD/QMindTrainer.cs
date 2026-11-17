@@ -228,11 +228,7 @@ namespace GrupoD
         private float ComputeReward(CellInfo agent, CellInfo other)
         {
             if (IsTerminalState(agent, other)) return -100f;
-            float d = agent.Distance(other, CellInfo.DistanceType.Manhattan);
-            float tier = d >= 8 ? 1f      // far
-                       : d >= 4 ? 0.5f    // medium
-                       : 0f;              // close
-            return 1f + tier;
+            return 1f;
         }
 
         private int ManhattanDistance(CellInfo a, CellInfo b)
