@@ -26,7 +26,7 @@ namespace GrupoD
 
             CellInfo nextPosition = ApplyAction(currentPosition, bestAction);
 
-            return nextPosition;
+            return nextPosition ?? currentPosition;
         }
 
         private string BuildStateKey(CellInfo agent, CellInfo other, WorldInfo _worldInfo)
@@ -37,23 +37,20 @@ namespace GrupoD
 
         private CellInfo ApplyAction(CellInfo agentCell, QAction action)
         {
+            int nx = agentCell.x;
+            int ny = agentCell.y;
+
             switch (action)
             {
-                case QAction.Up:
-                    return _worldInfo[agentCell.x, agentCell.y + 1];
-                
-                case QAction.Down:
-                    return _worldInfo[agentCell.x, agentCell.y - 1];
-                
-                case QAction.Right:
-                    return _worldInfo[agentCell.x + 1, agentCell.y];
-                
-                case QAction.Left:
-                    return _worldInfo[agentCell.x - 1, agentCell.y];
-                
-                default:
-                    return _worldInfo[agentCell.x, agentCell.y];
+                case QAction.Up: ny += 1; break;
+                case QAction.Down: ny -= 1; break;
+                case QAction.Right: nx += 1; break;
+                case QAction.Left: nx -= 1; break;
+                case QAction.Stay: return agentCell;
             }
+
+            CellInfo target = _worldInfo[nx, ny];
+            return (target != null && target.Walkable) ? target : agentCell;
         }
     }
 }
